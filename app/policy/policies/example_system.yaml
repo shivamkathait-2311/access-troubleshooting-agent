@@ -1,0 +1,34 @@
+# Example SystemPolicy — a Keycloak-backed internal app.
+# Copy this file to onboard a new system; validated by app/policy/loader.py
+# at process startup. All changes go through Git PR review.
+
+system_id: example-internal-app
+display_name: Example Internal App
+
+connector:
+  type: keycloak
+  base_url: https://sso.example.com
+  credential_path: secret/connectors/example-internal-app/keycloak
+  timeout_seconds: 10
+  extra:
+    realm: internal
+
+health_endpoint: https://example-internal-app.example.com/healthz
+
+role_permission_map:
+  # "<system_id>:default" is the one primary resource step 4 (authorization)
+  # checks for this phase — see app/orchestrator/steps/step4_authorization.py.
+  - resource: example-internal-app:default
+    required_roles:
+      - app-dashboard-viewer
+
+error_signatures:
+  - pattern: "HTTP 401.*token expired"
+    cause_code: token_expired
+    description: Session token expired; user should re-authenticate.
+  - pattern: "HTTP 502.*upstream"
+    cause_code: upstream_unavailable
+    description: Reverse proxy could not reach the app; likely an outage.
+
+playbook_ids:
+  - unlock-account-v1

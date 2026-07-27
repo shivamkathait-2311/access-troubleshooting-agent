@@ -1,0 +1,48 @@
+services:
+  postgres:
+    # pgvector/pgvector, not plain postgres: bundles the `vector` extension
+    # the RAG feature's Alembic migration enables (CREATE EXTENSION vector).
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ata_user
+      POSTGRES_PASSWORD: ata_password
+      POSTGRES_DB: ata_db
+    ports:
+      # Host port 5433, not 5432: avoids clashing with a locally-installed
+      # Postgres or another project's compose stack. Match this in .env's
+      # DATABASE_URL if you change it.
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ata_user -d ata_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      # Host port 6380, not 6379: avoids clashing with another project's
+      # Redis container. Match this in .env's REDIS_URL if you change it.
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Reference IdP + Keycloak connector target for local connector development.
+  # Off by default: `docker compose --profile connectors up`
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    profiles: ["connectors"]
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres_data:

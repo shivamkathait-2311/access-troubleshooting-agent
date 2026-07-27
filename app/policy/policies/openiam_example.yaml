@@ -1,0 +1,31 @@
+# Example SystemPolicy backed by the OpenIAM connector itself (steps 1-4
+# tested against your real OpenIAM instance). OPENIAM_BASE_URL etc. in .env
+# drive the actual connection (see app/connectors/openiam/connector.py) —
+# connector.base_url below is unused by OpenIAMConnector, kept only for
+# schema consistency.
+#
+# required_roles below uses "Super Security Admin" — a real role name
+# confirmed live via get_effective_permissions() against the admin test
+# account, not a fictional placeholder. It's just that account's own role,
+# though, not necessarily a meaningful business resource — swap in a real
+# resource/role pairing you actually want authorization checked for.
+
+system_id: openiam
+display_name: OpenIAM
+
+connector:
+  type: openiam
+  credential_path: secret/connectors/openiam/admin
+  timeout_seconds: 10
+
+# No health_endpoint set: OpenIAMConnector.check_availability() falls back
+# to a plain GET against OPENIAM_BASE_URL when this is unset.
+
+role_permission_map:
+  - resource: openiam:default
+    required_roles:
+      - Super Security Admin
+
+error_signatures: []
+
+playbook_ids: []
