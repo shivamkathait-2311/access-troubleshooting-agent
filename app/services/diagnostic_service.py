@@ -9,7 +9,7 @@ from app.core.exceptions import NotFoundError
 from app.core.security import Principal
 from app.models.diagnostic_run import DiagnosticRunModel
 from app.orchestrator.context import DiagnosticContext
-from app.orchestrator.state_machine import DiagnosticOrchestrator
+from app.orchestrator.orchestrator_protocol import DiagnosticOrchestratorProtocol
 from app.orchestrator.verdict_messages import build_escalation_message
 from app.orchestrator.verdicts import DiagnosticRunResult, FunnelStep
 from app.policy.store import PolicyStore
@@ -25,7 +25,7 @@ class DiagnosticService:
         self,
         policy_store: PolicyStore,
         connector_registry: ConnectorRegistry,
-        orchestrator: DiagnosticOrchestrator,
+        orchestrator: DiagnosticOrchestratorProtocol,
         repository: DiagnosticRepository,
         audit: AuditService,
     ):

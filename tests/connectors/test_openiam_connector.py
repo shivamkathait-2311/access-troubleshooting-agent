@@ -374,6 +374,108 @@ async def test_password_reset_url_none_when_no_principal_list() -> None:
     assert result.password_reset_url is None
 
 
+async def _get_auth_events(body: dict, status_code: int = 200) -> list:
+    connector = _make_connector()
+    fake_client = AsyncMock()
+    fake_client.authorized_get = AsyncMock(return_value=_StubResponse(body, status_code))
+    with patch(
+        "app.connectors.openiam.connector.get_openiam_token_client", return_value=fake_client
+    ):
+        return await connector.get_auth_events("some-subject-sub", timedelta(hours=24))
+
+
+def _audit_bean(
+    *,
+    action: str = "LOGIN",
+    result: str = "SUCCESS",
+    error: str = "",
+    timestamp: str = "2026-07-16T06:37:16.055+00:00",
+) -> dict:
+    return {"action": action, "result": result, "error": error, "timestamp": timestamp}
+
+
+async def test_auth_event_success_has_no_failure_reason() -> None:
+    events = await _get_auth_events({"beans": [_audit_bean(result="SUCCESS")]})
+    assert len(events) == 1
+    assert events[0].success is True
+    assert events[0].failure_reason is None
+
+
+async def test_auth_event_wrong_password_extracts_confirmed_error_code() -> None:
+    # errorCode=RESULT_INVALID_PASSWORD, confirmed live against qa422 — the
+    # `error` field is a Java exception dump, `action` is just "LOGIN" for
+    # every attempt (the bug this test guards against: failure_reason used
+    # to be set from `action`, which was never informative).
+    events = await _get_auth_events(
+        {
+            "beans": [
+                _audit_bean(
+                    result="FAILURE",
+                    error=(
+                        "Response(status=FAILURE, errorCode=RESULT_INVALID_PASSWORD, "
+                        "errorText=null, fieldMappings=null, stacktraceText=...)"
+                    ),
+                )
+            ]
+        }
+    )
+    assert events[0].success is False
+    assert events[0].failure_reason == "wrong_password"
+
+
+async def test_auth_event_invalid_login_extracts_confirmed_error_code() -> None:
+    events = await _get_auth_events(
+        {
+            "beans": [
+                _audit_bean(
+                    result="FAILURE",
+                    error="Response(status=FAILURE, errorCode=INVALID_LOGIN, errorText=null)",
+                )
+            ]
+        }
+    )
+    assert events[0].failure_reason == "invalid_login"
+
+
+async def test_auth_event_login_locked_extracts_confirmed_error_code() -> None:
+    events = await _get_auth_events(
+        {
+            "beans": [
+                _audit_bean(
+                    result="FAILURE",
+                    error="Response(status=FAILURE, errorCode=RESULT_LOGIN_LOCKED, errorText=null)",
+                )
+            ]
+        }
+    )
+    assert events[0].failure_reason == "account_locked"
+
+
+async def test_auth_event_unmapped_error_code_passed_through_raw() -> None:
+    # A real but not-yet-confirmed-and-mapped code shouldn't be discarded —
+    # still more useful to the user/support than nothing.
+    events = await _get_auth_events(
+        {
+            "beans": [
+                _audit_bean(
+                    result="FAILURE",
+                    error="Response(status=FAILURE, errorCode=SOME_NEW_CODE, errorText=null)",
+                )
+            ]
+        }
+    )
+    assert events[0].failure_reason == "SOME_NEW_CODE"
+
+
+async def test_auth_event_failure_without_error_code_falls_back_to_auth_failed() -> None:
+    events = await _get_auth_events({"beans": [_audit_bean(result="FAILURE", error="")]})
+    assert events[0].failure_reason == "auth_failed"
+
+
+async def test_auth_events_empty_on_http_error() -> None:
+    assert await _get_auth_events({}, status_code=500) == []
+
+
 async def _get_effective_permissions(
     body: dict, status_code: int = 200
 ) -> list[EffectivePermission]:

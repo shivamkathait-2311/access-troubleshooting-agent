@@ -27,6 +27,11 @@ class _CapturingLLMClient(LLMClient):
         self.last_user_message = user_message
         return "a friendly explanation"
 
+    async def run_tool_turn(
+        self, *, model, system, user_message, tools, response_schema, history, max_tokens=2048
+    ):
+        raise NotImplementedError
+
 
 def _locked_run_with_sensitive_fields() -> DiagnosticRunResult:
     return DiagnosticRunResult(

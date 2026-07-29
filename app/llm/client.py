@@ -1,3 +1,4 @@
+import json
 from abc import ABC, abstractmethod
 from typing import TypeVar
 
@@ -6,25 +7,27 @@ from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.llm.tool_types import ToolCall, ToolMessage, ToolSpec, ToolTurnResult
 
 T = TypeVar("T", bound=BaseModel)
 
 
 class LLMClient(ABC):
-    """Provider-agnostic LLM interface exposing exactly two operations:
-    `parse` (structured extraction) and `complete` (plain text generation).
+    """Provider-agnostic LLM interface. `parse` (structured extraction) and
+    `complete` (plain text generation) are zero-tool-authority — no
+    `**kwargs` passthrough, no `tools` parameter, fully enumerated
+    signatures — used by app/llm/intake_parser.py and app/llm/explanation.py,
+    neither of which ever gains tool authority.
 
-    Both signatures are fully enumerated on every implementation — there is
-    no `**kwargs` passthrough and no `tools` parameter anywhere. This is
-    the structural enforcement of "zero tool authority" for both the
-    intake parser and the explanation layer: it is not possible for a
-    caller to smuggle a `tools=` argument through any implementation, even
-    by mistake.
+    `run_tool_turn` is a deliberately separate, clearly-named third
+    capability: the only method on this interface that can hand the model
+    any tool authority at all. It exists solely for
+    app/orchestrator/agent_loop.py's LLM diagnostic agent — intake_parser.py
+    and explanation.py never call it and have no reason to.
 
-    Call sites (app/llm/intake_parser.py, app/llm/explanation.py) depend
-    only on this abstract type and never know which concrete provider is
-    active — that's resolved once, in app/dependencies/services.py, from
-    settings.LLM_PROVIDER.
+    Call sites depend only on this abstract type and never know which
+    concrete provider is active — that's resolved once, in
+    app/dependencies/services.py.
     """
 
     @abstractmethod
@@ -50,6 +53,31 @@ class LLMClient(ABC):
         max_tokens: int = 512,
     ) -> str:
         """Plain-text generation."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def run_tool_turn(
+        self,
+        *,
+        model: str,
+        system: str,
+        user_message: str,
+        tools: list[ToolSpec],
+        response_schema: type[BaseModel],
+        history: list[ToolMessage],
+        max_tokens: int = 2048,
+    ) -> ToolTurnResult:
+        """One turn of a tool-calling + structured-final-answer loop: sends
+        system + user_message + `tools` + `history` (prior tool-call
+        requests and their fed-back results) to the model. Returns either
+        the ToolCall(s) it wants executed next, or its final answer (as a
+        JSON string the caller validates against `response_schema` itself
+        — this method never imports the caller's concrete schema type).
+        The multi-turn loop, tool execution, and budget/timeout enforcement
+        all live in the caller (app/orchestrator/agent_loop.py) — this
+        method is a single request/response primitive, same level as
+        parse()/complete().
+        """
         raise NotImplementedError
 
 
@@ -103,3 +131,101 @@ class OpenAIClient(LLMClient):
             messages=messages,
         )
         return response.choices[0].message.content or ""
+
+    async def run_tool_turn(
+        self,
+        *,
+        model: str,
+        system: str,
+        user_message: str,
+        tools: list[ToolSpec],
+        response_schema: type[BaseModel],
+        history: list[ToolMessage],
+        max_tokens: int = 2048,
+    ) -> ToolTurnResult:
+        """One turn via client.chat.completions.parse(), which — unlike
+        parse() above — is called with both `tools=` (so the model can
+        request a tool call) and `response_format=` (so its eventual final
+        answer is schema-validated), simultaneously. `history` is replayed
+        in full every call, since the Chat Completions API is stateless
+        per request."""
+        messages: list[ChatCompletionMessageParam] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_message},
+        ]
+        for entry in history:
+            if entry.role == "assistant_tool_request":
+                assert entry.tool_calls is not None
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": call.call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": call.name,
+                                    "arguments": json.dumps(call.arguments),
+                                },
+                            }
+                            for call in entry.tool_calls
+                        ],
+                    }
+                )
+            else:
+                assert entry.tool_result is not None
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": entry.tool_result.call_id,
+                        "content": entry.tool_result.content,
+                    }
+                )
+
+        oa_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters_schema,
+                    # OpenAI's chat.completions.parse() requires every tool
+                    # to be "strict" when tools= is combined with
+                    # response_format= (auto-parsing the final answer) —
+                    # confirmed live: a non-strict tool raises ValueError
+                    # before any request is even sent.
+                    "strict": True,
+                },
+            }
+            for tool in tools
+        ]
+
+        response = await self._client.chat.completions.parse(
+            model=model,
+            max_completion_tokens=max_tokens,
+            messages=messages,
+            tools=oa_tools,  # type: ignore[arg-type]
+            tool_choice="auto",
+            response_format=response_schema,
+        )
+        message = response.choices[0].message
+
+        if message.tool_calls:
+            calls = [
+                ToolCall(
+                    call_id=call.id,
+                    name=call.function.name,
+                    arguments=json.loads(call.function.arguments or "{}"),
+                )
+                for call in message.tool_calls
+            ]
+            return ToolTurnResult(
+                tool_calls=calls,
+                transcript_entry=ToolMessage(role="assistant_tool_request", tool_calls=calls),
+            )
+
+        if message.parsed is None:
+            raise ValueError(
+                "OpenAI tool-turn response had neither tool_calls nor a parsed final answer"
+            )
+        return ToolTurnResult(final_answer_json=message.parsed.model_dump_json())

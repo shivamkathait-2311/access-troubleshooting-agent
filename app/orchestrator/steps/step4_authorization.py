@@ -1,29 +1,14 @@
 from datetime import UTC, datetime, timedelta
 
 from app.connectors.types import PermissionAuditEvent
+from app.orchestrator.audit_action_taxonomy import (
+    REVOKE_ACTIONS as _REVOKE_ACTIONS,
+)
+from app.orchestrator.audit_action_taxonomy import (
+    SYNC_ADVISORY_ACTIONS as _SYNC_ADVISORY_ACTIONS,
+)
 from app.orchestrator.context import DiagnosticContext
 from app.orchestrator.verdicts import FunnelStep, VerdictResult, VerdictStatus
-
-# Actions that mean "this specific role/group was removed" — the basis of
-# the access_revoked cause. Raw OpenIAM action strings, same as auth_events'
-# cause_code being an unbounded raw action string — not normalized here.
-_REVOKE_ACTIONS = {"DELETE_USER_FROM_ROLE", "DELETE_USER_FROM_GROUP"}
-
-# Provisioning/reconciliation actions — advisory only. Their result/success
-# semantics aren't confirmed against OpenIAM's real behavior yet (see
-# app/connectors/openiam/connector.py's _SYNC_ACTIONS docstring), so these
-# are surfaced as a factual note in `detail` and never gate PASS/FAIL.
-_SYNC_ADVISORY_ACTIONS = {
-    "PROVISIONING",
-    "GROUP_PROVISIONING",
-    "SEND_REPORT_OF_FAILED_PROVISION_REQUESTS",
-    "RETRY_PROVISIONING",
-    "RECONCILE_USER",
-    "RECONCILE_IDM_WITH_TARGET",
-    "RECONCILE_TARGET_WITH_IDM",
-    "RECONCILIATION_RECORD_FALSE",
-    "SYNCHRONIZATION_ORPHAN",
-}
 
 _AUDIT_LOOKBACK = timedelta(days=365)
 

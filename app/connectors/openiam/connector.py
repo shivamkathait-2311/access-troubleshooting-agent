@@ -1,4 +1,5 @@
 import asyncio
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
@@ -139,19 +140,45 @@ def _build_password_reset_url(base_url: str, login: str) -> str:
     )
 
 
+# The real per-attempt failure reason lives in `error` (a Java exception
+# dump, e.g. "Response(status=FAILURE, errorCode=RESULT_INVALID_PASSWORD,
+# errorText=null, ..., stacktraceText=...")), NOT in `action` (which is
+# just "LOGIN" for every attempt, success or fail — a prior version of this
+# code used `action` as failure_reason, which was never actually
+# informative). `errorCode=` is a consistently-formatted substring within
+# that dump — confirmed live against qa422 across a wide sample of real
+# failed logins. Three values confirmed so far; anything else observed
+# gets passed through raw rather than dropped, since an unmapped-but-real
+# code is still more useful than nothing — see step3_auth_events.py, which
+# uses this directly as cause_code.
+_AUTH_FAILURE_CAUSES = {
+    "RESULT_INVALID_PASSWORD": "wrong_password",
+    "INVALID_LOGIN": "invalid_login",
+    "RESULT_LOGIN_LOCKED": "account_locked",
+}
+_ERROR_CODE_PATTERN = re.compile(r"errorCode=([A-Za-z0-9_]+)")
+
+
+def _extract_failure_cause(bean: dict[str, Any]) -> str | None:
+    match = _ERROR_CODE_PATTERN.search(str(bean.get("error") or ""))
+    if match is None:
+        return None
+    raw_code = match.group(1)
+    return _AUTH_FAILURE_CAUSES.get(raw_code, raw_code)
+
+
 def _parse_audit_bean(bean: dict[str, Any]) -> AuthEvent | None:
     """Maps one `IdmAuditLogDoc` record to our AuthEvent shape — field
-    names (`timestamp`, `result`, `clientIP`, `action`) confirmed against
-    OpenIAM's published OpenAPI spec (components.schemas.IdmAuditLogDoc).
-    There's no resultCode/reason-style field for *why* a login failed;
-    `action` (e.g. "INCREMENT_FAIL_AUTH_COUNT") is the closest real signal
-    the schema offers, so it's used as failure_reason. `result`'s exact
-    success/failure string values aren't given as an enum in the spec
-    (typed as a plain string), so this matches a reasonably permissive set
-    of "success" spellings rather than a single hardcoded literal.
-    Returns None for a record missing a parseable timestamp, rather than
-    raising — one bad/unexpected record shouldn't blow up the whole
-    funnel step.
+    names (`timestamp`, `result`, `clientIP`) confirmed against OpenIAM's
+    published OpenAPI spec (components.schemas.IdmAuditLogDoc).
+    `failure_reason` comes from `_extract_failure_cause` (the `error`
+    field's embedded errorCode) — see the comment on `_AUTH_FAILURE_CAUSES`
+    above. `result`'s exact success/failure string values aren't given as
+    an enum in the spec (typed as a plain string), so this matches a
+    reasonably permissive set of "success" spellings rather than a single
+    hardcoded literal. Returns None for a record missing a parseable
+    timestamp, rather than raising — one bad/unexpected record shouldn't
+    blow up the whole funnel step.
     """
     raw_timestamp = bean.get("timestamp")
     if raw_timestamp is None:
@@ -167,7 +194,7 @@ def _parse_audit_bean(bean: dict[str, Any]) -> AuthEvent | None:
     return AuthEvent(
         timestamp=timestamp,
         success=success,
-        failure_reason=None if success else bean.get("action"),
+        failure_reason=None if success else (_extract_failure_cause(bean) or "auth_failed"),
         source_ip=bean.get("clientIP"),
     )
 

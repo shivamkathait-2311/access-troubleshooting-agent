@@ -8,6 +8,8 @@ from app.core.config import settings
 from app.core.vault import VaultClient
 from app.db.session import get_db
 from app.llm.client import LLMClient, OpenAIClient
+from app.orchestrator.agent_loop import LLMDiagnosticOrchestrator
+from app.orchestrator.orchestrator_protocol import DiagnosticOrchestratorProtocol
 from app.orchestrator.state_machine import DiagnosticOrchestrator
 from app.policy.store import PolicyStore
 from app.remediation.approval import ApprovalGate
@@ -55,7 +57,11 @@ def get_approval_gate() -> ApprovalGate:
     return ApprovalGate()
 
 
-def get_diagnostic_orchestrator() -> DiagnosticOrchestrator:
+def get_diagnostic_orchestrator(
+    llm_client: LLMClient = Depends(get_llm_client),
+) -> DiagnosticOrchestratorProtocol:
+    if settings.DIAGNOSTIC_ORCHESTRATOR_MODE == "llm_agent":
+        return LLMDiagnosticOrchestrator(llm_client)
     return DiagnosticOrchestrator()
 
 
@@ -97,7 +103,7 @@ def get_intake_service(
 def get_diagnostic_service(
     policy_store: PolicyStore = Depends(get_policy_store),
     connector_registry: ConnectorRegistry = Depends(get_connector_registry),
-    orchestrator: DiagnosticOrchestrator = Depends(get_diagnostic_orchestrator),
+    orchestrator: DiagnosticOrchestratorProtocol = Depends(get_diagnostic_orchestrator),
     repository: DiagnosticRepository = Depends(get_diagnostic_repository),
     audit: AuditService = Depends(get_audit_service),
 ) -> DiagnosticService:

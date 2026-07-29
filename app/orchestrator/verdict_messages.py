@@ -63,9 +63,11 @@ _STEP_FALLBACK_MESSAGES: dict[FunnelStep, str] = {
 }
 
 # Overrides for the small, known cause_code sets (account_status's 4 causes,
-# authorization's 3 causes). auth_events' cause_code is effectively
-# unbounded (OpenIAM's raw audit action string), so it has no per-cause
-# entries here — its step fallback above covers every case.
+# authorization's 3 causes, auth_events' 3 causes). auth_events' cause_code
+# is otherwise unbounded (OpenIAM's raw audit errorCode) — these 3 are the
+# only ones confirmed live so far (see _AUTH_FAILURE_CAUSES in
+# app/connectors/openiam/connector.py); anything else falls through to the
+# generic step fallback below.
 #
 # access_expired/access_revoked deliberately don't interpolate the specific
 # role/group name, date, or actor into this friendly message — those live
@@ -74,6 +76,21 @@ _STEP_FALLBACK_MESSAGES: dict[FunnelStep, str] = {
 # in this file.
 _CAUSE_MESSAGES: dict[tuple[FunnelStep, str], str] = {
     (FunnelStep.ACCOUNT_STATUS, "locked"): _LOCKED_ACCOUNT_MESSAGE,
+    (FunnelStep.AUTH_EVENTS, "wrong_password"): (
+        "Your most recent login attempt failed because the password entered "
+        "was incorrect. Double-check your password and try again, or reset "
+        "it if you're not sure."
+    ),
+    (FunnelStep.AUTH_EVENTS, "invalid_login"): (
+        "Your most recent login attempt failed because that login wasn't "
+        "recognized. Double-check you're using the correct login ID."
+    ),
+    (FunnelStep.AUTH_EVENTS, "account_locked"): (
+        "Your most recent login attempt failed because the account was "
+        "locked at that time. Unlocking requires an admin: contact your "
+        "IT/helpdesk team and ask them to use OpenIAM's Reset password "
+        f"action for your account. Full unlock procedure: {_OPENIAM_UNLOCK_DOC_URL}"
+    ),
     (FunnelStep.ACCOUNT_STATUS, "password_expired"): (
         "Your password has expired for {detail}. Please reset it to regain access."
     ),

@@ -145,6 +145,39 @@ def test_auth_events_failure_uses_step_fallback_regardless_of_raw_cause_code() -
     assert "login attempt failed" in message.lower()
 
 
+def test_wrong_password_message() -> None:
+    result = _make_result(
+        [_fail_verdict(FunnelStep.AUTH_EVENTS, "wrong_password")],
+        Outcome.SELF_SERVICE_FIX,
+        False,
+    )
+    message = build_verdict_message(result)
+    assert "password" in message.lower()
+    assert "incorrect" in message.lower()
+
+
+def test_invalid_login_message() -> None:
+    result = _make_result(
+        [_fail_verdict(FunnelStep.AUTH_EVENTS, "invalid_login")],
+        Outcome.SELF_SERVICE_FIX,
+        False,
+    )
+    message = build_verdict_message(result)
+    assert "login" in message.lower()
+    assert "recognized" in message.lower()
+
+
+def test_account_locked_auth_event_message_is_admin_referral() -> None:
+    result = _make_result(
+        [_fail_verdict(FunnelStep.AUTH_EVENTS, "account_locked")],
+        Outcome.SELF_SERVICE_FIX,
+        False,
+    )
+    message = build_verdict_message(result)
+    assert "admin" in message.lower()
+    assert "docs.openiam.com" in message
+
+
 def test_outage_message_includes_correlation_id() -> None:
     result = _make_result(
         [_fail_verdict(FunnelStep.SYSTEM_AVAILABILITY, "system_down")],

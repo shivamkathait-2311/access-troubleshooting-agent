@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -45,11 +46,16 @@ class Settings(BaseSettings):
     VAULT_ROLE: str = "access-troubleshooting-agent"
 
     # ==================== LLM ====================
-    # Both LLM call sites (app/llm/intake_parser.py, app/llm/explanation.py)
-    # are single-shot, zero-tool-authority calls — see app/llm/client.py.
+    # app/llm/intake_parser.py and app/llm/explanation.py are single-shot,
+    # zero-tool-authority calls — see app/llm/client.py. OPENAI_DIAGNOSTIC_MODEL
+    # is the one call site with real tool authority (LLMClient.run_tool_turn,
+    # used by app/orchestrator/agent_loop.py) — kept as its own setting
+    # rather than reusing an existing model name, so it can be pinned/rolled
+    # back independently of the other two.
     OPENAI_API_KEY: str = ""
     OPENAI_INTAKE_MODEL: str = "gpt-4o-mini"
     OPENAI_EXPLANATION_MODEL: str = "gpt-4o-mini"
+    OPENAI_DIAGNOSTIC_MODEL: str = "gpt-4o-mini"
 
     # ==================== Policy store ====================
     POLICY_DIR: str = "app/policy/policies"
@@ -95,6 +101,21 @@ class Settings(BaseSettings):
     # convenience for today's single-system reality, not a permanent
     # hardcode. See app/services/intake_service.py.
     DEFAULT_SYSTEM_ID: str = "openiam"
+    # Which orchestrator DiagnosticService uses: "deterministic" = the
+    # fixed step1->2->3->4 state machine (app/orchestrator/state_machine.py,
+    # unchanged, still fully deterministic); "llm_agent" = the LLM
+    # tool-calling agent (app/orchestrator/agent_loop.py) that decides
+    # which checks to run and when to stop, instead of a fixed order.
+    # Defaults to the existing, safe path — opt-in only. See
+    # app/dependencies/services.py::get_diagnostic_orchestrator.
+    DIAGNOSTIC_ORCHESTRATOR_MODE: Literal["deterministic", "llm_agent"] = "deterministic"
+    # Hard limits on the LLM diagnostic agent's tool-calling loop — a
+    # runaway or misbehaving model must still fail closed (see
+    # LLMDiagnosticOrchestrator._converse), never hang or spend unbounded
+    # API budget.
+    LLM_AGENT_MAX_TOOL_TURNS: int = 6
+    LLM_AGENT_MAX_TOOL_CALLS_PER_TURN: int = 3
+    LLM_AGENT_RUN_TIMEOUT_SECONDS: int = 30
 
     # ==================== Kill switch ====================
     # Agent-wide switch halts all diagnostic runs; remediation switch halts

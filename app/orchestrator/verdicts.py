@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -66,3 +67,10 @@ class DiagnosticRunResult(BaseModel):
     # reset link isn't actually relevant (e.g. active/disabled/not_found
     # accounts, or an all-clear escalation).
     password_reset_url: str | None = None
+    # Full tool-call/result/turn trail — only populated by
+    # LLMDiagnosticOrchestrator (app/orchestrator/agent_loop.py); always
+    # None for the deterministic DiagnosticOrchestrator path. Flows into
+    # the audit trail automatically via DiagnosticService.run_diagnostic()'s
+    # existing `result.model_dump(mode="json")` call — no change needed
+    # there.
+    agent_trace: list[dict[str, Any]] | None = None
